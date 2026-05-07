@@ -1,0 +1,59 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# --- uv / package managers ---
+.uv/
+uv.lock
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# --- Test / coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+*.key
+secrets/
+
+# --- Experiment artifacts ---
+# Raw measurement outputs are large + reproducible from scripts.
+# Aggregated tables and final figures (in results/figures, results/tables) ARE committed.
+results/raw/
+*.parquet
+*.feather
+
+# --- Datasets ---
+# Source corpora are downloaded by scripts; never re-host them in the repo.
+data/corpora/*
+data/parallel/*
+!data/corpora/.gitkeep
+!data/parallel/.gitkeep
+!data/**/README.md
+
+# --- Local API keys / scratch ---
+scratch/
+*.local.*
