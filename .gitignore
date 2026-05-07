@@ -57,3 +57,6 @@ data/parallel/*
 # --- Local API keys / scratch ---
 scratch/
 *.local.*
+
+# --- Session handoff notes (private working notes for cross-session continuity) ---
+notes/
