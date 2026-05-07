@@ -22,10 +22,27 @@ rate limits but they are well above what Phase 1 needs.
 from __future__ import annotations
 
 import os
+import sys
+import time
 
 import google.generativeai as genai
 
 from .base import Tokenizer, TokenizerInfo
+
+# Rate-limit retry policy. Gemini's free tier is generous (1500 RPM at
+# the time of writing) but corpus-scale runs occasionally hit per-second
+# bursts. Exponential backoff matches the Anthropic wrapper: 60s → 120s
+# → 240s, max 3 attempts.
+_RETRY_BACKOFFS = (60, 120, 240)
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    if "429" in msg or "quota" in msg or "rate" in msg or "exhausted" in msg:
+        return True
+    # google.api_core.exceptions.ResourceExhausted is the canonical type
+    # but importing it here would force a heavier dep — string check covers it.
+    return False
 
 _DEFAULT_MODEL = "gemini-2.5-flash"
 
@@ -76,6 +93,26 @@ class GoogleTokenizer(Tokenizer):
         )
         self._overhead = self._calibrate_overhead()
 
+    def _api_count_with_retry(self, text: str) -> int:
+        """Call ``count_tokens`` with rate-limit retry. Same policy as
+        anthropic_tok — retry on 429/quota, propagate other errors.
+        """
+        for attempt, backoff in enumerate([0, *_RETRY_BACKOFFS]):
+            if backoff > 0:
+                print(
+                    f"[google_tok] retry {attempt}/{len(_RETRY_BACKOFFS)} "
+                    f"after {backoff}s backoff",
+                    file=sys.stderr,
+                )
+                time.sleep(backoff)
+            try:
+                return self._model.count_tokens(text).total_tokens
+            except Exception as e:
+                if attempt < len(_RETRY_BACKOFFS) and _is_rate_limit_error(e):
+                    continue
+                raise
+        raise RuntimeError("retry loop exited without return — should not happen")
+
     def _calibrate_overhead(self) -> int:
         """Probe with ``"."`` and back out any constant overhead.
 
@@ -85,12 +122,9 @@ class GoogleTokenizer(Tokenizer):
         two probes of known-different lengths and solve the linear
         system.
         """
-        probe = "."
-        result = self._model.count_tokens(probe)
-        return result.total_tokens - 1
+        return self._api_count_with_retry(".") - 1
 
     def count(self, text: str) -> int:
         if not text:
             return 0
-        result = self._model.count_tokens(text)
-        return result.total_tokens - self._overhead
+        return self._api_count_with_retry(text) - self._overhead

@@ -38,10 +38,24 @@ sequential and fine for sanity-check / Phase 1 sample sizes.
 from __future__ import annotations
 
 import os
+import sys
+import time
 
 import anthropic
 
 from .base import Tokenizer, TokenizerInfo
+
+# Rate-limit retry policy. Corpus-scale sequential calls (1000+) can trip
+# Anthropic's RPM ceiling. Exponential backoff: 60s → 120s → 240s, max 3
+# attempts before the error propagates.
+_RETRY_BACKOFFS = (60, 120, 240)
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    if isinstance(exc, anthropic.RateLimitError):
+        return True
+    msg = str(exc).lower()
+    return "rate" in msg or "429" in msg or "overload" in msg
 
 _DEFAULT_MODEL = "claude-sonnet-4-5"
 
@@ -90,6 +104,36 @@ class AnthropicTokenizer(Tokenizer):
         )
         self._overhead = self._calibrate_overhead()
 
+    def _api_count_with_retry(self, text: str) -> int:
+        """Call ``messages.count_tokens`` with rate-limit retry.
+
+        Retries up to 3 times on RateLimitError or 429-flavored errors,
+        with backoffs from ``_RETRY_BACKOFFS``. Other errors propagate
+        immediately. Logs each retry to stderr so corpus-scale runs leave
+        a visible trail.
+        """
+        for attempt, backoff in enumerate([0, *_RETRY_BACKOFFS]):
+            if backoff > 0:
+                print(
+                    f"[anthropic_tok] retry {attempt}/{len(_RETRY_BACKOFFS)} "
+                    f"after {backoff}s backoff",
+                    file=sys.stderr,
+                )
+                time.sleep(backoff)
+            try:
+                resp = self._client.messages.count_tokens(
+                    model=self._model,
+                    messages=[{"role": "user", "content": text}],
+                )
+                return resp.input_tokens
+            except Exception as e:
+                if attempt < len(_RETRY_BACKOFFS) and _is_rate_limit_error(e):
+                    continue
+                raise
+        # Should be unreachable due to the loop's last iteration always
+        # either returning or raising.
+        raise RuntimeError("retry loop exited without return — should not happen")
+
     def _calibrate_overhead(self) -> int:
         """Measure the chat-template token overhead once at init.
 
@@ -97,18 +141,9 @@ class AnthropicTokenizer(Tokenizer):
         as exactly 1 content token. Whatever the API reports beyond that
         is the per-message scaffolding cost.
         """
-        probe = "."
-        resp = self._client.messages.count_tokens(
-            model=self._model,
-            messages=[{"role": "user", "content": probe}],
-        )
-        return resp.input_tokens - 1
+        return self._api_count_with_retry(".") - 1
 
     def count(self, text: str) -> int:
         if not text:
             return 0
-        resp = self._client.messages.count_tokens(
-            model=self._model,
-            messages=[{"role": "user", "content": text}],
-        )
-        return resp.input_tokens - self._overhead
+        return self._api_count_with_retry(text) - self._overhead
