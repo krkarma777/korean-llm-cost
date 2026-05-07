@@ -47,9 +47,12 @@ results/raw/
 *.feather
 
 # --- Datasets ---
-# Source corpora are downloaded by scripts; never re-host them in the repo.
+# Source corpora are downloaded by scripts or manually placed here;
+# never re-host them in the repo (license + size concerns).
 data/corpora/*
 data/parallel/*
+data/conversation/
+data/medical/
 !data/corpora/.gitkeep
 !data/parallel/.gitkeep
 !data/**/README.md
