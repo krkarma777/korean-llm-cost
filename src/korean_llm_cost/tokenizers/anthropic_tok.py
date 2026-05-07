@@ -25,10 +25,14 @@ different lengths and solving for the constant.
 
 Cost & speed
 ------------
-``count_tokens`` is **free** (Anthropic does not bill for token counting),
-but it is a network call (~50–200 ms each). For corpus-scale runs we'll
-need a parallel batch path; the current ``count_batch`` is the inherited
-sequential default and is fine for sanity-check / Phase 1 sample sizes.
+``count_tokens`` has **zero marginal cost** — Anthropic does not bill per
+call. However, the API requires a *non-zero account balance* to access
+at all (an empty-balance account gets HTTP 400 with
+``"credit balance is too low"``), so a one-time minimum top-up at
+console.anthropic.com is required even though counting itself is free.
+Each call is also a network round-trip (~50–200 ms). For corpus-scale
+runs we'll need a parallel batch path; the inherited ``count_batch`` is
+sequential and fine for sanity-check / Phase 1 sample sizes.
 """
 
 from __future__ import annotations
