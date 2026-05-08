@@ -19,11 +19,20 @@ Categories wired in Phase 1
   speaker_sex, speaker_age, media, session_id) is preserved alongside
   text. Sampling is **media-balanced** (n/5 from each messenger) so
   no single platform dominates the corpus.
-- ``"medical"`` — pending.
+- ``"medical"`` — KorMedMCQA (Korean Medical MCQ benchmark).
+  Public HuggingFace dataset (``sean0042/KorMedMCQA``), CC-BY-NC-2.0.
+  4 configs (dentist / doctor / nurse / pharm) sampled stratified
+  (N/4 stems per config from the ``train`` split). Per-stem metadata
+  (config, year, period, q_number, question_id) is preserved.
+  All sampling-protocol constants (repo, configs, per-config count,
+  filter range, seed, measurement-unit field) are imported from
+  ``medical_predictions`` to keep the binding pre-registration and
+  the loader implementation in lockstep — *do not hardcode here*.
 
 License caveats for the conversation corpus are tracked in
 ``notes/07_caveats.md`` §7 (license metadata template artifact) and
-§8 (annotator-level alphanumeric notation inconsistency).
+§8 (annotator-level alphanumeric notation inconsistency). KorMedMCQA
+license caveat is tracked in §13 (CC-BY-NC-2.0 non-commercial).
 """
 
 from __future__ import annotations
@@ -273,6 +282,157 @@ def _load_aihub_conversation(
     )
 
 
+# ----- KorMedMCQA loader (HF, stratified per-config sampling + metadata) -----
+
+
+def _load_kormedmcqa(n: int, seed: int, *, lo: int, hi: int) -> "LoadResult":
+    """Load KorMedMCQA stems with stratified per-config sampling.
+
+    Pipeline mirrors the conversation path but operates on the four
+    KorMedMCQA configs (``dentist`` / ``doctor`` / ``nurse`` / ``pharm``)
+    rather than five messengers:
+
+        load 4 configs → NFC-normalize → length filter → exact-string dedupe
+                       → group by config → sample n/4 per config → shuffle
+
+    All sampling-protocol constants — repo id, config names, per-config
+    count, length filter, seed, and measurement-unit field — are imported
+    from :mod:`medical_predictions` so the loader stays in lockstep with
+    the binding pre-registration. Nothing here is hardcoded.
+
+    Parameters
+    ----------
+    n
+        Total stems requested. Must be evenly divisible by the number of
+        configs (4) — i.e., 100 for the pilot, 1000 for the full run.
+        Other ``n`` values raise ``ValueError``.
+    seed
+        Deterministic sampling seed. Should match
+        ``medical_predictions.SAMPLE_SEED`` for the binding sample.
+    lo, hi
+        Length-filter bounds (chars). Should match
+        ``medical_predictions.LENGTH_FILTER_MIN/MAX`` (5 / 1000).
+    """
+    from datasets import load_dataset
+
+    from . import medical_predictions as mp
+
+    configs = mp.KORMEDMCQA_CONFIGS
+    if n % len(configs) != 0:
+        raise ValueError(
+            f"n={n} must be divisible by len(KORMEDMCQA_CONFIGS)={len(configs)}. "
+            "The pre-registered sampling is stratified balanced across configs; "
+            "asymmetric splits are not allowed without an amendment commit."
+        )
+    per_config = n // len(configs)
+
+    src = CorpusSource(
+        name="KorMedMCQA",
+        hf_id=mp.KORMEDMCQA_REPO,
+        # Configs are loaded individually below; ``hf_config`` records the
+        # full set for provenance.
+        hf_config=",".join(configs),
+        license="CC-BY-NC-2.0 (non-commercial)",
+        genre="medical",
+        notes=(
+            "Korean Medical MCQ benchmark. Stems-only (Option A, "
+            "medical_predictions.MEASUREMENT_UNIT='question'). License "
+            "caveat in notes/07_caveats.md §13."
+        ),
+    )
+
+    field = mp.MEASUREMENT_UNIT  # "question"
+
+    # Stage 1: collect stems with metadata across the 4 configs.
+    raw_items: list[dict] = []
+    for cfg in configs:
+        ds = load_dataset(
+            mp.KORMEDMCQA_REPO,
+            cfg,
+            split=mp.SPLIT_TO_SAMPLE_FROM,
+            trust_remote_code=False,
+        )
+        for row in ds:
+            text = (row.get(field) or "")
+            if not text:
+                continue
+            year = row.get("year") or 0
+            period = row.get("period") or 0
+            q_number = row.get("q_number") or 0
+            qid = f"{cfg}_{year}_{period}_{q_number}"
+            raw_items.append({
+                "text": str(text),
+                "config": cfg,
+                "year": int(year),
+                "period": int(period),
+                "q_number": int(q_number),
+                "question_id": qid,
+            })
+    raw_count = len(raw_items)
+
+    # Stage 2: NFC normalize text in-place. Drop empties.
+    normed_items: list[dict] = []
+    for item in raw_items:
+        t = unicodedata.normalize("NFC", item["text"]).strip()
+        if not t:
+            continue
+        item = dict(item)
+        item["text"] = t
+        normed_items.append(item)
+    after_norm = len(normed_items)
+
+    # Stage 3: length filter on text.
+    filtered = [it for it in normed_items if lo <= len(it["text"]) <= hi]
+    after_length = len(filtered)
+
+    # Stage 4: exact-string dedupe by text (across all configs combined).
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for it in filtered:
+        if it["text"] in seen:
+            continue
+        seen.add(it["text"])
+        deduped.append(it)
+    after_dedupe = len(deduped)
+
+    # Stage 5: stratified per-config sampling. Hard error if any config
+    # lacks enough stems — this surfaces data-drift early instead of
+    # silently rebalancing.
+    by_config: dict[str, list[dict]] = {c: [] for c in configs}
+    for it in deduped:
+        by_config[it["config"]].append(it)
+
+    rng = random.Random(seed)
+    sampled: list[dict] = []
+    for cfg in configs:
+        pool = by_config[cfg]
+        if len(pool) < per_config:
+            raise RuntimeError(
+                f"Only {len(pool)} stems for config={cfg!r} after filtering; "
+                f"need {per_config}. Loosen filters, switch split, or amend "
+                f"medical_predictions.PER_CONFIG_SAMPLE."
+            )
+        sampled.extend(rng.sample(pool, per_config))
+
+    rng.shuffle(sampled)  # avoid the output being grouped by config
+
+    sentences = [it["text"] for it in sampled]
+    metadata = tuple(
+        {k: v for k, v in it.items() if k != "text"} for it in sampled
+    )
+
+    return LoadResult(
+        source=src,
+        sentences=sentences,
+        raw_count=raw_count,
+        after_norm=after_norm,
+        after_length=after_length,
+        after_dedupe=after_dedupe,
+        seed=seed,
+        metadata=metadata,
+    )
+
+
 # ----- Pipeline -----
 
 
@@ -338,8 +498,13 @@ def load_category(
     if category == "conversation":
         return _load_aihub_conversation(n, seed, lo=lo_chars, hi=hi_chars)
 
+    # Medical has its own pipeline (4-config stratified sampling, all
+    # protocol constants imported from medical_predictions).
+    if category == "medical":
+        return _load_kormedmcqa(n, seed, lo=lo_chars, hi=hi_chars)
+
     if category not in _SOURCES:
-        available = ", ".join(["conversation", *_SOURCES]) or "(none yet)"
+        available = ", ".join(["conversation", "medical", *_SOURCES]) or "(none yet)"
         raise ValueError(
             f"Category {category!r} is not wired. Available: {available}. "
             "See docstring for category roadmap."
