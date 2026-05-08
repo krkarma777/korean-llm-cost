@@ -30,23 +30,26 @@ most one band.
     were dominated by BPE-friendly English loanwords. With genuine
     unfamiliar-entity load, byte-level fallback should activate strongly on
     penalty-cluster tokenizers and EXAONE's Korean-vocab extension should
-    pay off most. P7's reverse direction was a corpus artifact; real
-    entity density behaves as originally hypothesized.
+    pay off most. P7's reverse direction reflected the conversation
+    corpus's entity composition (BPE-friendly loanwords dominating
+    "entity-rich" subjects); under genuine unfamiliar-entity load,
+    vocabulary extension behaves as originally hypothesized.
 
 (c) Two mechanisms operating jointly — KPR/GPT in [0.76, 0.84]
     Vocabulary extension benefits both unfamiliar-BPE Korean
     (entity-density component) and colloquial Korean (register component).
     Medical activates the entity-density component but loses the register
-    component, leaving EXAONE's net advantage at or modestly weaker than
-    its news baseline (KPR/GPT 0.76× news). The two mechanisms partially
-    counteract on the medical genre.
+    component, with EXAONE's net advantage near its news baseline
+    (KPR/GPT 0.76×). The entity-density advantage and the register
+    surcharge partially offset on medical, leaving EXAONE's net advantage
+    at or modestly below its news baseline.
 
 (b) Register-invariance is the only mechanism — KPR/GPT in [0.85, 0.95]
     EXAONE's only edge over English-trained BPEs is colloquial-register
     coverage. On formal medical Korean, EXAONE converges toward the
-    efficient-cluster baseline; entity density was never a vocabulary-
-    extension lever for Korean. P7's reverse-direction finding was the
-    right mechanism after all.
+    efficient-cluster baseline; P7's register-invariance interpretation
+    was the complete mechanism (not a corpus-specific finding); entity
+    density was never a vocabulary-extension lever for Korean.
 
 Buffer and outside-band handling
 --------------------------------
@@ -55,19 +58,40 @@ Buffer and outside-band handling
 - (0.84, 0.85) — buffer zone, near-(b). Reported as "(b)-leaning" but not
   a clean (b) verdict.
 - KPR/GPT < 0.65 — *all three* hypotheses falsified, EXAONE is *more*
-  efficient on medical than even (a) predicts. Possible mechanisms to
-  consider: EXAONE's Korean training corpus may include disproportionate
-  medical text; or 한자 entities trigger extra byte-fallback on penalty-
-  cluster tokenizers beyond what (a) anticipates.
+  efficient on medical than even (a) predicts. Candidate fourth
+  mechanisms:
+    1. EXAONE's Korean training corpus may include disproportionate
+       medical text (LG AI Research has not published the corpus
+       composition; this would be inferable from the result).
+    2. Medical 한자 entities (의약품명, 진단명) trigger byte-level
+       fallback on penalty-cluster tokenizers more aggressively than (a)
+       anticipates, widening the cluster gap further than predicted in
+       (d).
+    3. KorMedMCQA stems may be drawn from popular medical lexicon
+       (consumer-facing, frequently encountered Korean medical
+       vocabulary) rather than specialist jargon, fitting EXAONE's
+       general Korean vocabulary closely.
 - KPR/GPT > 0.95 — *all three* hypotheses falsified, EXAONE essentially
-  loses its advantage on medical. Possible mechanisms: medical's
-  formal-register Latin/한자 mix may be uniformly hard for *every*
-  tokenizer (cluster gap collapses); or EXAONE's vocabulary extension
-  doesn't cover medical Korean specifically.
+  loses its advantage on medical. Candidate fourth mechanisms:
+    1. Medical's formal-register Latin/한자 mix is uniformly hard for
+       *every* tokenizer; the cluster gap collapses and EXAONE's
+       vocabulary edge becomes moot.
+    2. EXAONE's vocabulary extension targets specifically *non-formal*
+       Korean (web/social/conversational) and offers no advantage on
+       formal-register written Korean.
+    3. EXAONE's vocabulary extension may be optimized for colloquial-
+       register Korean (the only register P7 demonstrably benefited
+       from), with formal medical Korean treated as out-of-distribution
+       and falling back to base-tokenizer coverage — an extreme version
+       of hypothesis (b).
 
 A landing in either outside-band region is itself a publishable finding,
 not a measurement failure. The Discussion would dedicate a paragraph to
 articulating the fourth-mechanism scenario.
+
+Boundary handling: 0.75 inclusively maps to (A), 0.76 inclusively maps to
+(C); the open interval (0.75, 0.76) is the A-C buffer zone classified as
+'between-A-and-C'. The same pattern applies between (C) and (B).
 """
 
 from __future__ import annotations
@@ -91,31 +115,31 @@ def classify_kpr_gpt(value: float) -> str:
     """Classify a measured EXAONE KPR/GPT against the pre-registered bands.
 
     Returns one of:
-      'a'                  — entity-density penalty resurfaces (clean)
-      'a-buffer'           — buffer near-(a), ambiguous
-      'c'                  — two mechanisms (clean)
-      'c-buffer'           — buffer above (c) and below (b), ambiguous
-      'b'                  — register-invariance only (clean)
-      'all-falsified-low'  — < 0.65, new mechanism required
-      'all-falsified-high' — > 0.95, new mechanism required
+      'A'                — entity-density penalty resurfaces (clean)
+      'between-A-and-C'  — buffer near-(a), ambiguous
+      'C'                — two mechanisms (clean)
+      'between-C-and-B'  — buffer above (c) and below (b), ambiguous
+      'B'                — register-invariance only (clean)
+      'below-all'        — < 0.65, new mechanism required
+      'above-all'        — > 0.95, new mechanism required
     """
     if value < ALL_FALSIFIED_BELOW:
-        return "all-falsified-low"
+        return "below-all"
     if value > ALL_FALSIFIED_ABOVE:
-        return "all-falsified-high"
+        return "above-all"
     a_lo, a_hi = HYPOTHESIS_A_ENTITY_DENSITY
     c_lo, c_hi = HYPOTHESIS_C_BOTH_MECHANISMS
     b_lo, b_hi = HYPOTHESIS_B_REGISTER_ONLY
     if a_lo <= value <= a_hi:
-        return "a"
+        return "A"
     if c_lo <= value <= c_hi:
-        return "c"
+        return "C"
     if b_lo <= value <= b_hi:
-        return "b"
+        return "B"
     if a_hi < value < c_lo:
-        return "a-buffer"
+        return "between-A-and-C"
     if c_hi < value < b_lo:
-        return "c-buffer"
+        return "between-C-and-B"
     raise AssertionError(f"unreachable classification for value={value}")
 
 
@@ -186,17 +210,17 @@ assert HYPOTHESIS_C_BOTH_MECHANISMS[1] < HYPOTHESIS_B_REGISTER_ONLY[0]
 assert ALL_FALSIFIED_BELOW == HYPOTHESIS_A_ENTITY_DENSITY[0]
 assert ALL_FALSIFIED_ABOVE == HYPOTHESIS_B_REGISTER_ONLY[1]
 assert TOTAL_SAMPLE == 1000
-assert classify_kpr_gpt(0.70) == "a"
-assert classify_kpr_gpt(0.80) == "c"
-assert classify_kpr_gpt(0.90) == "b"
-assert classify_kpr_gpt(0.755) == "a-buffer"
-assert classify_kpr_gpt(0.845) == "c-buffer"
-assert classify_kpr_gpt(0.60) == "all-falsified-low"
-assert classify_kpr_gpt(1.00) == "all-falsified-high"
+assert classify_kpr_gpt(0.70) == "A"
+assert classify_kpr_gpt(0.80) == "C"
+assert classify_kpr_gpt(0.90) == "B"
+assert classify_kpr_gpt(0.755) == "between-A-and-C"
+assert classify_kpr_gpt(0.845) == "between-C-and-B"
+assert classify_kpr_gpt(0.60) == "below-all"
+assert classify_kpr_gpt(1.00) == "above-all"
 # Boundary inclusivity at exact band edges
-assert classify_kpr_gpt(0.65) == "a"
-assert classify_kpr_gpt(0.75) == "a"
-assert classify_kpr_gpt(0.76) == "c"
-assert classify_kpr_gpt(0.84) == "c"
-assert classify_kpr_gpt(0.85) == "b"
-assert classify_kpr_gpt(0.95) == "b"
+assert classify_kpr_gpt(0.65) == "A"
+assert classify_kpr_gpt(0.75) == "A"
+assert classify_kpr_gpt(0.76) == "C"
+assert classify_kpr_gpt(0.84) == "C"
+assert classify_kpr_gpt(0.85) == "B"
+assert classify_kpr_gpt(0.95) == "B"
