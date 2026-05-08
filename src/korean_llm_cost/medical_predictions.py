@@ -112,7 +112,19 @@ ALL_FALSIFIED_ABOVE: float = 0.95
 
 
 def classify_kpr_gpt(value: float) -> str:
-    """Classify a measured EXAONE KPR/GPT against the pre-registered bands.
+    """Classify a measured EXAONE rTPC-GPT against the pre-registered bands.
+
+    Note: 'KPR/GPT' is paper-renamed to 'rTPC-GPT' for naming accuracy.
+    KPR proper would require an English baseline; this metric is the
+    relative TPC against GPT-4o on the same Korean corpus, so the
+    paper-facing name is rTPC-GPT. Function name is preserved for git
+    history stability — this module is the binding pre-registration
+    artifact for the medical verdict bands (commit 25a434b), and
+    renaming the public symbol would either require a destructive
+    history rewrite or introduce a shadowing alias that adds noise to
+    a small module. The bands and the verdict semantics are unchanged.
+    See notes/12_metric_definitions.md for the full rename rationale
+    and the paper Methods-section footnote.
 
     Returns one of:
       'A'                — entity-density penalty resurfaces (clean)
